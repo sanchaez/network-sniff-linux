@@ -7,10 +7,6 @@
  * License-Filename: LICENSE
  */
 
-/* For Linux-specific functions */
-#define _GNU_SOURCE
-
-
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
@@ -27,6 +23,10 @@
 /* Signal handling */
 #include <signal.h>
 
+/**
+ * @fn daemonize
+ * @brief Convert this process to a daemon.
+ */
 void
 daemonize(void)
 {
@@ -53,8 +53,10 @@ daemonize(void)
 
     /* Create a new SID for the child process */
     sid = setsid();
-    if (sid < 0) {
-        syslog(LOG_ERR, "setsid:%s", strerror(errno));
+    if (sid < 0)
+    {
+        const int err = errno;
+        syslog(LOG_ERR, "setsid:%s", strerror(err));
         exit(EXIT_FAILURE);
     }
 
@@ -65,9 +67,15 @@ daemonize(void)
     freopen( "/dev/null", "w", stderr);
 }
 
-/* Handler for SIGTERM */
+/**
+ * @fn sigterm_handler
+ * @brief Handler of SIGTERM
+ * @param signum value ignored.
+ */
 void
-sigterm_handler(int signum) {
+sigterm_handler(int signum)
+{
+    (void)signum;
     exit(EXIT_SUCCESS);
 }
 
@@ -81,7 +89,8 @@ main(void)
     signal(SIGTERM, sigterm_handler);
 
     /* main loop */
-    while(1) {
+    while(1)
+    {
         /* do useful stuff */
         sleep(100);
     }
