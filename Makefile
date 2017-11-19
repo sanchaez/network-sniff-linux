@@ -9,7 +9,7 @@ CONTROL_SRC_DIR= control
 # Store object files in the BUILD_DIR
 DAEMON_OBJ_DIR= $(BUILD_DIR)/$(DAEMON_SRC_DIR)_obj
 CONTROL_OBJ_DIR= $(BUILD_DIR)/$(CONTROL_SRC_DIR)_obj
-DAEMON_OBJ= $(addprefix $(DAEMON_OBJ_DIR)/, main.o)
+DAEMON_OBJ= $(addprefix $(DAEMON_OBJ_DIR)/, main.o capture_module.o)
 CONTROL_OBJ= $(addprefix $(CONTROL_OBJ_DIR)/, main.o)
 
 # Compiler options
@@ -29,7 +29,6 @@ control: $(CONTROL_OBJ_DIR) $(CONTROL_LINK_TARGET)
 	@echo $(CONTROL_LINK_TARGET) - CLI app build successful.
 
 # Run program stack
-# FIXME: do a proper daemon and cli modules
 run:
 	$(DAEMON_LINK_TARGET)
 	$(CONTROL_LINK_TARGET)
@@ -60,5 +59,5 @@ $(CONTROL_OBJ_DIR)/%.o: $(CONTROL_SRC_DIR)/%.c
 	@echo Compiling $@...
 	@$(CC) -c $(CFLAGS) $< -o $@
 
-# Dependancy checks
-# TODO: Add dependancy targets
+# Dependency checks
+$(DAEMON_SRC_DIR)/capture_module.c: $(DAEMON_SRC_DIR)/capture_module.h
