@@ -7,7 +7,6 @@
  * License-Filename: LICENSE
  */
 
-
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -41,7 +40,7 @@ doc_about()
  * Prints help message to the stdout.
  */
 void
-doc_help()
+doc_help(void)
 {
     printf("Supported commands:\n");
     printf("--help                  :   print this message.\n");
@@ -60,7 +59,7 @@ doc_help()
  * Prints usage message to stdout.
  */
 void
-doc_usage()
+doc_usage(void)
 {
     printf("Usage: %s [OPTIONS...]\n", program_name);
     printf("Use --help for details.\n");
@@ -79,7 +78,7 @@ doc_usage()
  * Used as a handler to command line parameter.
  */
 int
-daemon_start()
+daemon_start(void)
 {
     return 0;
 }
@@ -92,7 +91,7 @@ daemon_start()
  * Used as a handler to command line parameter.
  */
 int
-daemon_stop()
+daemon_stop(void)
 {
     return 0;
 }
@@ -197,13 +196,11 @@ argument_parser(int argc, char **argv)
         {
             /* parameter is present */
             daemon_stat(argv[2]);
-
         }
         else if(argc == 2)
         {
             /* parameter is absent */
             daemon_stat(NULL);
-
         }
         else /* too many parameters */
             doc_usage();
