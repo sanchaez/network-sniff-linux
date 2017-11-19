@@ -23,6 +23,8 @@
 /* Signal handling */
 #include <signal.h>
 
+#include "capture_module.h"
+
 /**
  * @fn daemonize
  * @brief Convert this process to a daemon.
@@ -34,14 +36,14 @@ daemonize(void)
 
     /* Fork off the parent process */
     pid = fork();
-    if (pid < 0) {
+    if (pid < 0)
         exit(EXIT_FAILURE);
-    }
+
     /* If we got a good PID, then
         we can exit the parent process. */
-    if (pid > 0) {
+    if (pid > 0)
         exit(EXIT_SUCCESS);
-    }
+
     /* Move on as a child process!          */
     /* We can do whatever we want from here */
 
@@ -62,9 +64,9 @@ daemonize(void)
 
     /* set file descriptors to /dev/null to ignore any reading/writing
        this is better than just closing */
-    freopen( "/dev/null", "r", stdin);
-    freopen( "/dev/null", "w", stdout);
-    freopen( "/dev/null", "w", stderr);
+    freopen("/dev/null", "r", stdin);
+    freopen("/dev/null", "w", stdout);
+    freopen("/dev/null", "w", stderr);
 }
 
 /**
@@ -72,6 +74,7 @@ daemonize(void)
  * @brief Handler of SIGTERM
  * @param signum value ignored.
  */
+__attribute__((noreturn))
 void
 sigterm_handler(int signum)
 {
@@ -91,9 +94,8 @@ main(void)
     /* main loop */
     while(1)
     {
-        /* do useful stuff */
+        /* do something useful */
         sleep(100);
     }
-
-    exit(EXIT_SUCCESS);
+    return EXIT_SUCCESS;
 }
