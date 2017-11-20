@@ -14,7 +14,7 @@ CONTROL_OBJ= $(addprefix $(CONTROL_OBJ_DIR)/, main.o)
 
 # Compiler options
 CC= gcc
-CFLAGS= -Wall -Werror -g
+CFLAGS= -Wall -Werror -g -pthread
 
 # phony targets
 .PHONY: all daemon control run clean
@@ -44,11 +44,11 @@ $(BUILD_DIR) $(DAEMON_OBJ_DIR) $(CONTROL_OBJ_DIR):
 # Linking executables
 $(DAEMON_LINK_TARGET): $(DAEMON_OBJ)
 	@echo Linking $@...
-	@$(CC) $(CDEBUGFLAGS) -o $@ $^
+	@$(CC) $(CFLAGS) -o $@ $^
 
 $(CONTROL_LINK_TARGET): $(CONTROL_OBJ)
 	@echo Linking $@...
-	@$(CC) $(CDEBUGFLAGS) -o $@ $^
+	@$(CC) $(CFLAGS) -o $@ $^
 
 # Outputting obj files to right directory
 $(DAEMON_OBJ_DIR)/%.o: $(DAEMON_SRC_DIR)/%.c
