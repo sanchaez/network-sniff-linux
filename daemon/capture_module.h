@@ -26,6 +26,7 @@ typedef struct {
 typedef struct {
     const char* iface_str;
     pip_stat ip_stats;
+    int entries_count;
 } iface_stat, *piface_stat;
 
 /**
@@ -80,13 +81,5 @@ packet_ip_stats(const char* ip_str, pip_stat stats);
  */
 int
 packet_capture_stop();
-
-/**
- * @fn packet_stats_dump
- * @brief
- * @return
- */
-int
-packet_stats_dump();
 
 #endif // CAPTURE_MODULE_H
