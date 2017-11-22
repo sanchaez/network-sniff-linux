@@ -10,6 +10,8 @@
 #ifndef CAPTURE_MODULE_H
 #define CAPTURE_MODULE_H
 
+/* Uses definitions from <net/if.h> */
+
 /**
  * @struct ip_stat
  * @typedef ip_stat, *pip_stat
@@ -24,18 +26,10 @@ typedef struct {
  * @typedef iface_stat, *iface_stat
  */
 typedef struct {
-    const char* iface_str;
+    char iface_str[IFNAMSIZ];
     pip_stat ip_stats;
     int entries_count;
 } iface_stat, *piface_stat;
-
-/**
- * @fn packet_capture_init
- * @brief
- * @return
- */
-int
-packet_capture_init();
 
 /**
  * @fn packet_capture_loop
@@ -43,7 +37,7 @@ packet_capture_init();
  * @return
  */
 int
-packet_capture_loop();
+packet_capture_start();
 
 /**
  * @fn packet_set_iface
