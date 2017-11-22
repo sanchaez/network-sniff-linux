@@ -17,7 +17,7 @@
  * @typedef ip_stat, *pip_stat
  */
 typedef struct {
-    const char* ip_str;
+    struct in_addr ip;
     int count;
 } ip_stat, *pip_stat;
 
@@ -27,7 +27,7 @@ typedef struct {
  */
 typedef struct {
     char iface_str[IFNAMSIZ];
-    pip_stat ip_stats;
+    void *ip_stats_tree;
     int entries_count;
 } iface_stat, *piface_stat;
 

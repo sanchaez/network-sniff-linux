@@ -13,7 +13,7 @@
 #include <sys/mman.h>
 
 #include <net/if.h>
-#include <netinet/in.h>
+#include <netinet/ip.h>
 
 #include <pthread.h>
 #include <string.h>
@@ -46,25 +46,52 @@ const char *default_iface = "eth0";
 #define SOCKET_DATA_SIZE_MAX 65536
 
 /***********************************/
-/* iface_stat manipulation helpers */
+/* structure manipulation helpers */
 /***********************************/
+
+static int
+ip_stat_new(pip_stat stat, struct in_addr *ip)
+{
+    /* !!! malloc !!! */
+    stat = malloc(sizeof(ip_stat));
+    if(!stat)
+        return ENOMEM;
+
+    stat->ip = *ip;
+    stat->count = 1;
+
+    return 0;
+}
+
+static int
+ip_stat_compare_fn(const void *l, const void *r)
+{
+    const pip_stat stat_l = (const pip_stat) l;
+    const pip_stat stat_r = (const pip_stat) r;
+
+    if(stat_l->ip.s_addr > stat_r->ip.s_addr)
+        return 1;
+
+    if(stat_l->ip.s_addr < stat_r->ip.s_addr)
+        return -1;
+
+    return 0;
+}
 
 static int
 iface_stat_init(piface_stat stats)
 {
-    if(stats)
-    {
-        /* copy and ensure NUL-termination */
-        strncpy(stats->iface_str, default_iface, IFNAMSIZ-1);
-        stats->iface_str[IFNAMSIZ-1] = '\0';
+    if(!stats)
+        return -1; /* nothing to work with */
 
-        stats->ip_stats = NULL;
-        stats->entries_count = 0;
+    /* copy and ensure NUL-termination */
+    strncpy(stats->iface_str, default_iface, IFNAMSIZ-1);
+    stats->iface_str[IFNAMSIZ-1] = '\0';
 
-        return 0;
-    }
+    stats->ip_stats_tree = NULL;
+    stats->entries_count = 0;
 
-    return -1; /* nothing to work with */
+    return 0;
 }
 
 static int
@@ -103,31 +130,69 @@ is_stopped(pthread_mutex_t *mtx)
   return -1; /* FIXME: EINVAL is not handled, thread stops */
 }
 
-/* Returns 'struct thread_arg' */
-static void*
-packet_loop_fn(void* arg)
+int
+work_with_addr(struct in_addr *addr, void **search_tree_root)
 {
-    int data_retrieved_size, err = 0;
+    pip_stat new_stat = NULL, found_stat;
+    void *returned_value;
+    int err;
+
+    err = ip_stat_new(new_stat, addr);
+    if(err)
+        return err;
+
+    returned_value = tsearch((void *) new_stat, search_tree_root, &ip_stat_compare_fn);
+    if(!returned_value)
+    {
+        return ENOMEM;
+    }
+
+    found_stat = (*(pip_stat *)returned_value);
+
+    /* increment count if a value was found */
+    if(found_stat != new_stat)
+    {
+        free(new_stat);
+        ++found_stat->count;
+    } /* else new entry was added, skipping */
+
+    return 0;
+}
+
+/* thread errors */
+int thread_last_error;
+
+/* Returns 'struct thread_arg' */
+static void *
+packet_loop_fn(void *arg)
+{
+    int data_retrieved_size;
     socklen_t saddr_len;
-    int *return_value = NULL;
-    struct sockaddr saddr;
-    //struct in_addr in;
+    struct sockaddr_in saddr;
     unsigned char buffer[SOCKET_DATA_SIZE_MAX];
+
+    /* ignore arg */
+    (void) arg;
+
+    thread_last_error = 0;
 
     /* open socket for sniffing */
     int capture_socket = socket(AF_INET, SOCK_RAW, IPPROTO_TCP);
 
     if(capture_socket < 0)
     {
-        err = errno;
-        syslog(LOG_ERR, "Socket creation failed: %s", strerror(err));
-        return_value = malloc(sizeof(int));
-        *return_value = err;
-        return return_value;
+        thread_last_error = errno;
+        syslog(LOG_ERR, "Socket creation failed: %s", strerror(thread_last_error));
+
+        return NULL;
     }
 
     /* configure socket interface */
-    setsockopt(capture_socket, SOL_SOCKET, SO_BINDTODEVICE, &(g_stats.iface_str), IFNAMSIZ);
+    setsockopt(capture_socket,
+               SOL_SOCKET,
+               SO_BINDTODEVICE,
+               &(g_stats.iface_str),
+               IFNAMSIZ);
 
     /* capture packets */
     while(!is_stopped(&stop_mutex))
@@ -135,22 +200,27 @@ packet_loop_fn(void* arg)
         saddr_len = sizeof(saddr);
         data_retrieved_size = recvfrom(capture_socket,
                                        (void *)&buffer,
-                                       SOCKET_DATA_SIZE_MAX,
-                                       0, &saddr, &saddr_len);
+                                       SOCKET_DATA_SIZE_MAX, 0,
+                                       (struct sockaddr *)&saddr,
+                                       &saddr_len);
         if(data_retrieved_size < 0)
         {
-            err = errno;
-            syslog(LOG_WARNING, "recvfrom failed: %s", strerror(err));
+            thread_last_error = errno;
+            syslog(LOG_WARNING, "recvfrom failed: %s", strerror(thread_last_error));
             continue;
         }
 
         /* process packet */
-
+        /* we only need to analyze sockaddr_in structure here to retrieve IP */
+        thread_last_error = work_with_addr(&saddr.sin_addr, &g_stats.ip_stats_tree);\
+        if(thread_last_error)
+        {
+            syslog(LOG_ERR, "work_with_addr failed: %s", strerror(thread_last_error));
+            return NULL;
+        }
     }
 
-    /* cleanup */
-
-    return return_value;
+    return NULL;
 }
 
 /*********************/
@@ -160,14 +230,13 @@ packet_loop_fn(void* arg)
 int
 packet_capture_start()
 {
-    /* Trylock a mutex. If it locks (zero) then thread was stopped.
+    /* Trylock a mutex. If it locks then thread was stopped.
        Do nothing when mutex was already locked. */
     if(is_stopped(&stop_mutex))
     {
         int err;
 
         /* load stats */
-        /* !!! malloc !!! */
         if(packet_stats_load(&g_stats))
         {
             /* load failed - create new record */
@@ -208,25 +277,24 @@ packet_iface_stats(const char *iface_str, piface_stat stats)
 int
 packet_capture_stop()
 {
-    /* Trylock a mutex. If it is busy, thread is still running. */
+    /* Trylock a mutex. If it is busy, thread is likely still running. */
     if(!is_stopped(&stop_mutex))
     {
-        int *return_val = NULL;
+        //int *return_val = NULL;
 
         /* Unlock mutex used as a cancelation flag and wait for thread to return. */
         /* !!! join thread !!! */
         pthread_mutex_unlock(&stop_mutex);
-        pthread_join(capture_thread, (void **)return_val);
+        pthread_join(capture_thread, NULL);
 
-        /* check return val */
-        if(return_val)
+        /* check last error*/
+        if(thread_last_error)
         {
-            syslog(LOG_ERR, "Error encountered in thread: %s", strerror(*return_val));
-            free(return_val);
+            syslog(LOG_ERR, "Error encountered in thread: %s", strerror(thread_last_error));
         }
 
         packet_stats_dump(&g_stats);
-    }
+    } /* else - thread already stopped */
+
     return 0;
 }
-
