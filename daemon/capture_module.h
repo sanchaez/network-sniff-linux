@@ -18,7 +18,7 @@
  */
 typedef struct {
     struct in_addr ip;
-    int count;
+    long count;
 } ip_stat, *pip_stat;
 
 /**

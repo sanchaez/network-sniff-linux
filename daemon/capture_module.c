@@ -19,6 +19,8 @@
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
+
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -167,7 +169,6 @@ ip_stat_tree_serialize_fn(const void *nodep, VISIT order, int depth)
     case endorder:
         break;
     }
-
 }
 
 static int
@@ -176,7 +177,10 @@ packet_stats_dump(iface_stat *stats)
     char filename_buffer[FILENAME_MAX];
 
 
-    if(snprintf(filename_buffer, FILENAME_MAX, STATSFILE_TEMPLATE, stats->iface_str) < 0)
+    if(snprintf(filename_buffer,
+                FILENAME_MAX,
+                STATSFILE_TEMPLATE,
+                stats->iface_str) < 0)
     {
         /* errno is set on POSIX */
         return errno;
@@ -201,7 +205,10 @@ packet_stats_load(iface_stat *stats)
 {
     char filename[FILENAME_MAX];
 
-    if(snprintf(filename, FILENAME_MAX, STATSFILE_TEMPLATE, stats->iface_str) < 0)
+    if(snprintf(filename,
+                FILENAME_MAX,
+                STATSFILE_TEMPLATE,
+                stats->iface_str) < 0)
     {
         /* errno is set on POSIX */
         return errno;
@@ -211,27 +218,76 @@ packet_stats_load(iface_stat *stats)
     if(!fd)
         return errno;
 
-    while(!feof(fd))
+    char *ip_buffer = NULL, *count_buffer = NULL;
+    size_t len_ip = 0, len_count = 0;
+    ssize_t read_ip = 0, read_count = 0;
+    int err = 0;
+    /*
+     * Assuming the following format:
+     * 255.255.255.255;12345\n
+     */
+    while((read_ip >= 0) && (read_count >= 0))
     {
-        char ip_buffer[INET_ADDRSTRLEN];
-        char count_buffer[MAX_INT_CHARS];
-        pip_stat new_stat = malloc(sizeof(new_stat));
-        if(!new_stat)
-            return ENOMEM;
-        fgets(ip_buffer, sizeof(ip_buffer), fd);
-        /* verify (and skip) ';' */
-        if(!(fgetc(fd) == ';'))
+        char *endptr;
+        pip_stat new_stat, tree_stat;
+        read_ip = getdelim(&ip_buffer, &len_ip, ';', fd);
+        /* getdelim might fail */
+        if(errno)
         {
-            free(new_stat);
+            err = errno;
+            syslog(LOG_ERR, "getdelim() failed: %s", strerror(err));
+            break;
+        }
+
+        read_count = getline(&count_buffer, &len_count, fd);
+        /* getline might fail */
+        if(errno)
+        {
+            err = errno;
+            syslog(LOG_ERR, "getline() failed: %s", strerror(err));
+            break;
+        }
+
+        new_stat = malloc(sizeof(new_stat));
+        if(!new_stat)
+        {
+            syslog(LOG_ERR, "malloc() failed: %s", strerror(ENOMEM));
+            fclose(fd);
+            return ENOMEM;
+        }
+
+        /* a line is read, converting */
+        /* convert IP */
+        if(!inet_pton(AF_INET, ip_buffer, &new_stat->ip))
+            continue;
+
+        /* convert count */
+        new_stat->count = strtol(count_buffer, &endptr, 10);
+        if(errno)
+        {
+            err = errno;
+            syslog(LOG_ERR, "strtol() failed: %s", strerror(err));
             continue;
         }
-        fgets(count_buffer, sizeof(count_buffer), fd);
+        if(endptr == count_buffer)
+        {
+            syslog(LOG_ERR, "strtol() failed: No digits were found (%s)", endptr);
+            continue;
+        }
 
-        //...
+        /* add new_stat to tree */
+        tree_stat = tsearch((void *) new_stat,
+                            g_stats.ip_stats_tree,
+                            ip_stat_compare_fn);
+        if(tree_stat != new_stat)
+        {
+            /* in this case value was found and overwritten */
+            free(new_stat);
+        }
     }
 
     fclose(fd);
-    return 0;
+    return err;
 }
 
 /*****************/
@@ -259,7 +315,7 @@ is_stopped(pthread_mutex_t *mtx)
 }
 
 int
-work_with_addr(struct in_addr *addr, void **search_tree_root)
+work_with_addr(struct in_addr *addr, piface_stat stat)
 {
     pip_stat new_stat = NULL, found_stat;
     void *returned_value;
@@ -269,7 +325,7 @@ work_with_addr(struct in_addr *addr, void **search_tree_root)
     if(err)
         return err;
 
-    returned_value = tsearch((void *) new_stat, search_tree_root, &ip_stat_compare_fn);
+    returned_value = tsearch((void *) new_stat, stat->ip_stats_tree, &ip_stat_compare_fn);
     if(!returned_value)
     {
         /* tsearch fails when no element can be allocated */
@@ -278,12 +334,17 @@ work_with_addr(struct in_addr *addr, void **search_tree_root)
 
     found_stat = (*(pip_stat *)returned_value);
 
-    /* increment count if a value was found */
     if(found_stat != new_stat)
     {
-        free(new_stat);
+        /* increment count if a value was found */
         ++found_stat->count;
-    } /* else new entry was added, skipping */
+        free(new_stat);
+    }
+    else
+    {
+        /* new entry was added, increment entries_count */
+        ++stat->entries_count;
+    }
 
     return 0;
 }
@@ -344,7 +405,7 @@ packet_loop_fn(void *arg)
         /* process packet */
         /* we only need to analyze sockaddr_in structure here to retrieve IP */
         pthread_mutex_lock(&stats_mutex);
-        thread_last_error = work_with_addr(&saddr.sin_addr, &g_stats.ip_stats_tree);
+        thread_last_error = work_with_addr(&saddr.sin_addr, &g_stats);
         pthread_mutex_unlock(&stats_mutex);
         if(thread_last_error)
         {
@@ -423,6 +484,7 @@ packet_capture_stop()
     if(thread_last_error)
     {
         syslog(LOG_ERR, "Error encountered in thread: %s", strerror(thread_last_error));
+        return thread_last_error;
     }
 
     packet_stats_dump(&g_stats);
@@ -432,5 +494,5 @@ packet_capture_stop()
 
 void packet_stats_clear()
 {
-    tdestroy(&g_stats, ip_stat_delete);
+    tdestroy(g_stats.ip_stats_tree, ip_stat_delete);
 }
