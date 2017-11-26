@@ -76,4 +76,12 @@ packet_ip_stats(const char* ip_str, pip_stat stats);
 int
 packet_capture_stop();
 
+/**
+ * @fn packet_stats_clear
+ * @brief
+ * @return
+ */
+void
+packet_stats_clear();
+
 #endif // CAPTURE_MODULE_H

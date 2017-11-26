@@ -14,11 +14,13 @@
 
 #include <net/if.h>
 #include <netinet/ip.h>
+#include <arpa/inet.h>
 
 #include <pthread.h>
 #include <string.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 #include "capture_module.h"
 
@@ -27,7 +29,7 @@
 
 /* Red-Black tree from glibc */
 /* Note: using radix trees would be much better here */
-#define _GNU_SOURCE
+#define __USE_GNU 1
 #include <search.h>
 
 pthread_t capture_thread;
@@ -40,8 +42,10 @@ pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 iface_stat g_stats;
 
-const char *statsfile = "/var/tmp/netsniffd/stats";
-const char *default_iface = "eth0";
+#define STATSFILE_TEMPLATE "/var/tmp/netsniffd/%s.stat"
+#define DEFAULT_IFACE "eth0"
+
+char *iface_name = DEFAULT_IFACE;
 
 #define SOCKET_DATA_SIZE_MAX 65536
 
@@ -61,6 +65,12 @@ ip_stat_new(pip_stat stat, struct in_addr *ip)
     stat->count = 1;
 
     return 0;
+}
+
+static void
+ip_stat_delete(void *stat)
+{
+    free((pip_stat)stat);
 }
 
 static int
@@ -85,7 +95,7 @@ iface_stat_init(piface_stat stats)
         return -1; /* nothing to work with */
 
     /* copy and ensure NUL-termination */
-    strncpy(stats->iface_str, default_iface, IFNAMSIZ-1);
+    strncpy(stats->iface_str, DEFAULT_IFACE, IFNAMSIZ-1);
     stats->iface_str[IFNAMSIZ-1] = '\0';
 
     stats->ip_stats_tree = NULL;
@@ -94,15 +104,133 @@ iface_stat_init(piface_stat stats)
     return 0;
 }
 
+/***************************/
+/* Serialization functions */
+/***************************/
+
+/* supefluos buffer to store int */
+#define MAX_INT_CHARS 256
+#define IP_STAT_STRING_BUFSIZ INET_ADDRSTRLEN + MAX_INT_CHARS + 3
+const char *entry_pattern = "%s;%d\n";
+FILE *fd;
+
+static char *
+ipstat2str(pip_stat stat)
+{
+    char *result;
+    char ip_buffer[INET_ADDRSTRLEN];
+
+    /* convert IP address */
+    if(!inet_ntop(AF_INET, &stat->ip, ip_buffer, INET_ADDRSTRLEN))
+    {
+        return NULL;
+    }
+
+    /* !!! malloc !!! */
+    result = malloc(IP_STAT_STRING_BUFSIZ);
+    if(!result)
+        return NULL;
+    if(snprintf(result, IP_STAT_STRING_BUFSIZ, entry_pattern, result, stat->count) < 0)
+    {
+        /* errno is set on POSIX */
+        free(result);
+        return NULL;
+    }
+
+    return result;
+}
+
+static void
+ip_stat_tree_serialize_fn(const void *nodep, VISIT order, int depth)
+{
+    /* ignore depth */
+    (void)depth;
+
+    /* we are interested in preorder and leaf */
+    switch(order)
+    {
+    case preorder:
+    case leaf:
+        {
+            pip_stat data = *((pip_stat *) nodep);
+            char *string_to_print = ipstat2str(data);
+            if(string_to_print)
+            {
+                fputs(string_to_print, fd);
+                /* !!! free !!! */
+                free(string_to_print);
+            }
+        }
+        break;
+
+    case postorder:
+    case endorder:
+        break;
+    }
+
+}
+
 static int
 packet_stats_dump(iface_stat *stats)
 {
+    char filename_buffer[FILENAME_MAX];
+
+
+    if(snprintf(filename_buffer, FILENAME_MAX, STATSFILE_TEMPLATE, stats->iface_str) < 0)
+    {
+        /* errno is set on POSIX */
+        return errno;
+    }
+
+    fd = fopen(filename_buffer, "w");
+    if(!fd)
+    {
+        return errno;
+    }
+
+    /* Walk the tree and put nodes to the file in defined strings.
+       It will use the global fd that we have set up earlier */
+    twalk(stats->ip_stats_tree, ip_stat_tree_serialize_fn);
+
+    fclose(fd);
     return 0;
 }
 
 static int
 packet_stats_load(iface_stat *stats)
 {
+    char filename[FILENAME_MAX];
+
+    if(snprintf(filename, FILENAME_MAX, STATSFILE_TEMPLATE, stats->iface_str) < 0)
+    {
+        /* errno is set on POSIX */
+        return errno;
+    }
+
+    fd = fopen(filename, "r");
+    if(!fd)
+        return errno;
+
+    while(!feof(fd))
+    {
+        char ip_buffer[INET_ADDRSTRLEN];
+        char count_buffer[MAX_INT_CHARS];
+        pip_stat new_stat = malloc(sizeof(new_stat));
+        if(!new_stat)
+            return ENOMEM;
+        fgets(ip_buffer, sizeof(ip_buffer), fd);
+        /* verify (and skip) ';' */
+        if(!(fgetc(fd) == ';'))
+        {
+            free(new_stat);
+            continue;
+        }
+        fgets(count_buffer, sizeof(count_buffer), fd);
+
+        //...
+    }
+
+    fclose(fd);
     return 0;
 }
 
@@ -144,6 +272,7 @@ work_with_addr(struct in_addr *addr, void **search_tree_root)
     returned_value = tsearch((void *) new_stat, search_tree_root, &ip_stat_compare_fn);
     if(!returned_value)
     {
+        /* tsearch fails when no element can be allocated */
         return ENOMEM;
     }
 
@@ -188,11 +317,13 @@ packet_loop_fn(void *arg)
     }
 
     /* configure socket interface */
+    pthread_mutex_lock(&stats_mutex);
     setsockopt(capture_socket,
                SOL_SOCKET,
                SO_BINDTODEVICE,
                &(g_stats.iface_str),
                IFNAMSIZ);
+    pthread_mutex_unlock(&stats_mutex);
 
     /* capture packets */
     while(!is_stopped(&stop_mutex))
@@ -212,7 +343,9 @@ packet_loop_fn(void *arg)
 
         /* process packet */
         /* we only need to analyze sockaddr_in structure here to retrieve IP */
-        thread_last_error = work_with_addr(&saddr.sin_addr, &g_stats.ip_stats_tree);\
+        pthread_mutex_lock(&stats_mutex);
+        thread_last_error = work_with_addr(&saddr.sin_addr, &g_stats.ip_stats_tree);
+        pthread_mutex_unlock(&stats_mutex);
         if(thread_last_error)
         {
             syslog(LOG_ERR, "work_with_addr failed: %s", strerror(thread_last_error));
@@ -230,28 +363,28 @@ packet_loop_fn(void *arg)
 int
 packet_capture_start()
 {
+    int err;
+
     /* Trylock a mutex. If it locks then thread was stopped.
        Do nothing when mutex was already locked. */
-    if(is_stopped(&stop_mutex))
+    if(!is_stopped(&stop_mutex))
+        return 0;
+
+    /* load stats */
+    if(packet_stats_load(&g_stats))
     {
-        int err;
+        /* load failed - create new record */
+        iface_stat_init(&g_stats);
+    }
 
-        /* load stats */
-        if(packet_stats_load(&g_stats))
-        {
-            /* load failed - create new record */
-            iface_stat_init(&g_stats);
-        }
-
-        /* !!! create thread !!! */
-        pthread_mutex_lock(&stop_mutex);
-        err = pthread_create(&capture_thread, NULL, &packet_loop_fn, NULL);
-        if(err)
-        {
-            syslog(LOG_ERR, "pthread_create failed: %s", strerror(err));
-            return err;
-        }
-    } /* else - thread already running */
+    /* !!! create thread !!! */
+    pthread_mutex_lock(&stop_mutex);
+    err = pthread_create(&capture_thread, NULL, &packet_loop_fn, NULL);
+    if(err)
+    {
+        syslog(LOG_ERR, "pthread_create failed: %s", strerror(err));
+        return err;
+    }
 
     return 0;
 }
@@ -278,23 +411,26 @@ int
 packet_capture_stop()
 {
     /* Trylock a mutex. If it is busy, thread is likely still running. */
-    if(!is_stopped(&stop_mutex))
+    if(is_stopped(&stop_mutex))
+            return 0;
+
+    /* Unlock mutex used as a cancelation flag and wait for thread to return. */
+    /* !!! join thread !!! */
+    pthread_mutex_unlock(&stop_mutex);
+    pthread_join(capture_thread, NULL);
+
+    /* check last error*/
+    if(thread_last_error)
     {
-        //int *return_val = NULL;
+        syslog(LOG_ERR, "Error encountered in thread: %s", strerror(thread_last_error));
+    }
 
-        /* Unlock mutex used as a cancelation flag and wait for thread to return. */
-        /* !!! join thread !!! */
-        pthread_mutex_unlock(&stop_mutex);
-        pthread_join(capture_thread, NULL);
-
-        /* check last error*/
-        if(thread_last_error)
-        {
-            syslog(LOG_ERR, "Error encountered in thread: %s", strerror(thread_last_error));
-        }
-
-        packet_stats_dump(&g_stats);
-    } /* else - thread already stopped */
+    packet_stats_dump(&g_stats);
 
     return 0;
+}
+
+void packet_stats_clear()
+{
+    tdestroy(&g_stats, ip_stat_delete);
 }
