@@ -139,27 +139,18 @@ daemon_stat(const char *iface_str)
     return 0;
 }
 
-/********************/
-/* Argument parsing */
-/********************/
-
-/**
- * @fn argument_parser
- * @brief Parse command line arguments.
- * @param argc command line arguments count
- * @param argv command line arguments, cannot be NULL
- *
- * Parses command line parameters in a naive way.
- * FIXME: I wouldd prefer to use argp, but it does not allow parameters without dashes.
- */
-void
-argument_parser(int argc, char **argv)
+int 
+main(int argc, char **argv)
 {
+    /* Handle command line arguments.
+     * FIXME: I would prefer to use argp, but it does not allow
+     *        parameters without dashes. */
+
     /* if no option is given or it's invalid, show usage */
     if (argc < 2 || argc > 4)
     {
         doc_usage();
-        return;
+        return 0;
     }
 
     /* parse individual options, skipping the app name */
@@ -207,13 +198,6 @@ argument_parser(int argc, char **argv)
     }
     else  /* invalid option given, show usage */
         doc_usage();
-}
-
-int 
-main(int argc, char **argv)
-{
-    /* handle command line arguments */
-    argument_parser(argc, argv);
 
     return 0;
 }
