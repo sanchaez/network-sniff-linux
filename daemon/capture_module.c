@@ -7,34 +7,34 @@
  * License-Filename: LICENSE
  */
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <sys/mman.h>
+#include "stdafx.h"
 
-#include <net/if.h>
-#include <netinet/ip.h>
 #include <arpa/inet.h>
-
 #include <pthread.h>
-#include <string.h>
-#include <errno.h>
 
-#define _GNU_SOURCE
-#include <stdlib.h>
-#include <stdio.h>
+/**
+ * @struct s_internal_ip_stat
+ * @typedef internal_ip_stat
+ */
+typedef struct s_internal_ip_stat {
+    struct in_addr ip;
+    long count;
+} internal_ip_stat;
 
-#include "capture_module.h"
+/**
+ * @struct s_internal_iface_stat
+ * @typedef internal_iface_stat
+ */
+typedef struct s_internal_iface_stat {
+    char iface_str[IFNAMSIZ];
+    void *ip_stats_tree;
+    long entries_count;
+} internal_iface_stat;
 
-/* Log writer */
-#include <syslog.h>
-
-/* Red-Black tree from glibc */
-/* Note: using radix trees would be much better here */
-#define __USE_GNU 1
-#include <search.h>
+internal_iface_stat g_stats;
 
 pthread_t capture_thread;
+
 /* Mutex is used as a thread cancellation flag.
  * It locks upon thread creation and releases when thread should exit.
  * This is done to control a loop inside the thread. */
@@ -42,24 +42,21 @@ pthread_mutex_t stop_mutex = PTHREAD_MUTEX_INITIALIZER;
 /* Mutex to control access to stats */
 pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-iface_stat g_stats;
-
 #define STATSFILE_TEMPLATE "/var/tmp/netsniffd/%s.stat"
 #define DEFAULT_IFACE "eth0"
+#define SOCKET_DATA_SIZE_MAX 65536
 
 char *iface_name = DEFAULT_IFACE;
-
-#define SOCKET_DATA_SIZE_MAX 65536
 
 /***********************************/
 /* structure manipulation helpers */
 /***********************************/
 
 static int
-ip_stat_new(pip_stat stat, struct in_addr *ip)
+ip_stat_new(internal_ip_stat * stat, struct in_addr *ip)
 {
     /* !!! malloc !!! */
-    stat = malloc(sizeof(ip_stat));
+    stat = malloc(sizeof(internal_ip_stat));
     if(!stat)
         return ENOMEM;
 
@@ -72,14 +69,14 @@ ip_stat_new(pip_stat stat, struct in_addr *ip)
 static void
 ip_stat_delete(void *stat)
 {
-    free((pip_stat)stat);
+    free((internal_ip_stat *)stat);
 }
 
 static int
 ip_stat_compare_fn(const void *l, const void *r)
 {
-    const pip_stat stat_l = (const pip_stat) l;
-    const pip_stat stat_r = (const pip_stat) r;
+    const internal_ip_stat *stat_l = (const internal_ip_stat *) l;
+    const internal_ip_stat *stat_r = (const internal_ip_stat *) r;
 
     if(stat_l->ip.s_addr > stat_r->ip.s_addr)
         return 1;
@@ -91,7 +88,7 @@ ip_stat_compare_fn(const void *l, const void *r)
 }
 
 static int
-iface_stat_init(piface_stat stats)
+iface_stat_init(internal_iface_stat * stats)
 {
     if(!stats)
         return -1; /* nothing to work with */
@@ -117,7 +114,7 @@ const char *entry_pattern = "%s;%d\n";
 FILE *fd;
 
 static char *
-ipstat2str(pip_stat stat)
+ipstat2str(internal_ip_stat *stat)
 {
     char *result;
     char ip_buffer[INET_ADDRSTRLEN];
@@ -154,7 +151,7 @@ ip_stat_tree_serialize_fn(const void *nodep, VISIT order, int depth)
     case preorder:
     case leaf:
         {
-            pip_stat data = *((pip_stat *) nodep);
+            internal_ip_stat * data = *((internal_ip_stat **) nodep);
             char *string_to_print = ipstat2str(data);
             if(string_to_print)
             {
@@ -172,7 +169,7 @@ ip_stat_tree_serialize_fn(const void *nodep, VISIT order, int depth)
 }
 
 static int
-packet_stats_dump(iface_stat *stats)
+packet_stats_dump(internal_iface_stat *stats)
 {
     char filename_buffer[FILENAME_MAX];
 
@@ -201,7 +198,7 @@ packet_stats_dump(iface_stat *stats)
 }
 
 static int
-packet_stats_load(iface_stat *stats)
+packet_stats_load(internal_iface_stat *stats)
 {
     char filename[FILENAME_MAX];
 
@@ -229,7 +226,7 @@ packet_stats_load(iface_stat *stats)
     while((read_ip >= 0) && (read_count >= 0))
     {
         char *endptr;
-        pip_stat new_stat, tree_stat;
+        internal_ip_stat *new_stat, *tree_stat;
         read_ip = getdelim(&ip_buffer, &len_ip, ';', fd);
         /* getdelim might fail */
         if(errno)
@@ -315,9 +312,9 @@ is_stopped(pthread_mutex_t *mtx)
 }
 
 int
-work_with_addr(struct in_addr *addr, piface_stat stat)
+work_with_addr(struct in_addr *addr, internal_iface_stat * stat)
 {
-    pip_stat new_stat = NULL, found_stat;
+    internal_ip_stat *new_stat = NULL, *found_stat;
     void *returned_value;
     int err;
 
@@ -332,7 +329,7 @@ work_with_addr(struct in_addr *addr, piface_stat stat)
         return ENOMEM;
     }
 
-    found_stat = (*(pip_stat *)returned_value);
+    found_stat = (*(internal_ip_stat **)returned_value);
 
     if(found_stat != new_stat)
     {
@@ -456,14 +453,19 @@ packet_set_iface(const char *iface_str)
     return 0;
 }
 
-int
-packet_ip_stats(const char *ip_str, pip_stat stats)
+int packet_get_iface_stats(packet_interface_stats **stats_out, size_t *stats_size_out, const char *iface_str)
+{
+    *stats_out = NULL;
+    *stats_size_out = 0;
+    return 0;
+}
+
+int packet_get_ip_stats(const char *ip_str, packet_ip_stats *stats)
 {
     return 0;
 }
 
-int
-packet_iface_stats(const char *iface_str, piface_stat stats)
+int packet_get_ip_count(const char *ip_str)
 {
     return 0;
 }
@@ -496,3 +498,4 @@ void packet_stats_clear()
 {
     tdestroy(g_stats.ip_stats_tree, ip_stat_delete);
 }
+
