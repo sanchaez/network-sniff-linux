@@ -8,8 +8,19 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <errno.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <net/if.h>
+#include <netinet/in.h>
+
+#include "custom_com_def.h"
+
 
 const char *program_name = "netsniff";
 const char *program_version = "1.0";
@@ -69,6 +80,25 @@ doc_usage(void)
 /* Daemon control functions */
 /****************************/
 
+#define SOCKET_INIT()\
+    int ipc_socket;\
+    struct sockaddr_un remote;\
+    ipc_socket = socket(AF_UNIX, SOCK_STREAM, 0);\
+    if(ipc_socket == -1)\
+    {\
+        perror("socket");\
+        exit(1);\
+    }\
+    remote.sun_family = AF_UNIX;\
+    strcpy(remote.sun_path, IPC_SOCKET_PATH);\
+    if (connect(ipc_socket, (struct sockaddr *) &remote, sizeof(remote)) == -1) {\
+        perror("connect");\
+        exit(1);\
+    }
+
+
+#define SOCKET_CLEANUP() close(ipc_socket);
+
 /**
  * @fn daemon_start
  * @brief Start netsniffd.
@@ -77,10 +107,31 @@ doc_usage(void)
  * Start sniffing packets on a default interface (eth0).
  * Used as a handler to command line parameter.
  */
-int
+void
 daemon_start(void)
 {
-    return 0;
+    SOCKET_INIT();
+    /* send command */
+    uint32_t command = DOPT_START, status;
+    if (send(ipc_socket, &command, sizeof(command), 0) == -1)
+    {
+        perror("send");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+    /* receive response */
+    if (recv(ipc_socket, &status, sizeof(status), 0) == -1)
+    {
+        perror("recv");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+
+    if(status)
+    {
+        printf("Error occured on netstiffd: %s", strerror(status));
+    }
+    SOCKET_CLEANUP();
 }
 
 /**
@@ -90,10 +141,31 @@ daemon_start(void)
  *
  * Used as a handler to command line parameter.
  */
-int
+void
 daemon_stop(void)
 {
-    return 0;
+    SOCKET_INIT();
+    /* send command */
+    uint32_t command = DOPT_STOP, status;
+    if (send(ipc_socket, &command, sizeof(command), 0) == -1)
+    {
+        perror("send");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+    /* receive response */
+    if (recv(ipc_socket, &status, sizeof(status), 0) == -1)
+    {
+        perror("recv");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+
+    if(status)
+    {
+        printf("Error occured on netstiffd: %s", strerror(status));
+    }
+    SOCKET_CLEANUP();
 }
 
 /**
@@ -105,10 +177,57 @@ daemon_stop(void)
  * Prints packet count for a single IP, if it was registered previously.
  * Used as a handler to command line parameter.
  */
-int
+void
 daemon_print_ip(const char *ip_str)
 {
-    return 0;
+    SOCKET_INIT()
+    /* send command */
+    uint32_t command = DOPT_IP_COUNT, status, count;
+    if (send(ipc_socket, &command, sizeof(command), 0) == -1)
+    {
+        perror("send");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+    /* send arg */
+    char *arg = calloc(INET_ADDRSTRLEN * sizeof(char), 1);
+    if(!arg)
+    {
+        perror("calloc");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+
+    strcpy(arg, ip_str);
+    if (send(ipc_socket, &arg, INET_ADDRSTRLEN * sizeof(char), 0) == -1)
+    {
+        perror("send");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+
+    /* receive response */
+    if (recv(ipc_socket, &status, sizeof(status), 0) == -1)
+    {
+        perror("recv");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+
+    if (recv(ipc_socket, &count, sizeof(count), 0) == -1)
+    {
+        perror("recv");
+        SOCKET_CLEANUP();
+        exit(1);
+    }
+    /* print response */
+    printf("%d packets passed thru", count);
+
+    if(status)
+    {
+        printf("Error occured on netstiffd: %s", strerror(status));
+    }
+    SOCKET_CLEANUP()
 }
 
 /**
@@ -119,10 +238,12 @@ daemon_print_ip(const char *ip_str)
  *
  * Used as a handler to command line parameter.
  */
-int
+void
 daemon_select_iface(const char *iface_str)
 {
-    return 0;
+ //   SOCKET_INIT()
+
+ //   SOCKET_CLEANUP()
 }
 
 /**
@@ -133,10 +254,12 @@ daemon_select_iface(const char *iface_str)
  *
  * Used as a handler to command line parameter.
  */
-int
+void
 daemon_stat(const char *iface_str)
 {
-    return 0;
+//    SOCKET_INIT()
+
+ //   SOCKET_CLEANUP()
 }
 
 int 

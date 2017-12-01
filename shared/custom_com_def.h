@@ -10,6 +10,8 @@
 #ifndef CUSTOM_COM_DEF_H
 #define CUSTOM_COM_DEF_H
 
+#define IPC_SOCKET_PATH "/tmp/netsniffd.sock"
+
 /**
  * @enum passed_option
  * @brief Enumerated options for daemon.
@@ -39,7 +41,7 @@
  *
  * All options except DOPT_STOP send int32_t `status_code` first to
  * indicate if they succeeded or failed. If they succeed, reply is
- * sent afterwards if needed.
+ * sent afterwards if needed. Failure statuses should match errno codes.
  *
  * Reply values:
  * DOPT_START       -

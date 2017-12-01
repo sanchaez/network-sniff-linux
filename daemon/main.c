@@ -80,6 +80,7 @@ void
 sigterm_handler(int signum)
 {
     (void)signum;
+    syslog(LOG_DEBUG, "Exiting...");
     close(ipc_socket_fd);
     packet_capture_stop();
     exit(EXIT_SUCCESS);
@@ -319,7 +320,7 @@ dopt_stat_handler(int remote_connection_socket)
     err = send_logged(remote_connection_socket, &reply_status, sizeof(reply_status));
     if(err)
     {
-        syslog(LOG_ERR, "DOPT_STOP status reply failed!");
+        syslog(LOG_ERR, "DOPT_IP_COUNT status reply failed!");
         return err;
     }
 
@@ -331,7 +332,7 @@ dopt_stat_handler(int remote_connection_socket)
     err = send_logged(remote_connection_socket, &iface_stats_size, sizeof(iface_stats_size));
     if(err)
     {
-        syslog(LOG_ERR, "DOPT_STOP value reply failed!");
+        syslog(LOG_ERR, "DOPT_IP_COUNT value reply failed!");
         if(stats_count)
             free(stats_count);
         return err;
@@ -350,7 +351,7 @@ dopt_stat_handler(int remote_connection_socket)
     err = send_logged(remote_connection_socket, &stats_count, sizeof(iface_stats_size));
     if(err)
     {
-        syslog(LOG_ERR, "DOPT_STOP value reply failed!");
+        syslog(LOG_ERR, "DOPT_IP_COUNT value reply failed!");
         free(stats_count);
         return err;
     }
@@ -362,10 +363,10 @@ dopt_stat_handler(int remote_connection_socket)
         {
             err = send_logged(remote_connection_socket,
                               &iface_stats[i].stats[i].ip,
-                              sizeof(INET_ADDRSTRLEN));
+                              INET_ADDRSTRLEN * sizeof(char));
             if(err)
             {
-                syslog(LOG_ERR, "DOPT_STOP value reply failed!");
+                syslog(LOG_ERR, "DOPT_IP_COUNT value reply failed!");
                 free(stats_count);
                 return err;
             }
@@ -375,7 +376,7 @@ dopt_stat_handler(int remote_connection_socket)
                               sizeof(uint32_t));
             if(err)
             {
-                syslog(LOG_ERR, "DOPT_STOP value reply failed!");
+                syslog(LOG_ERR, "DOPT_IP_COUNT value reply failed!");
                 free(stats_count);
                 return err;
             }
@@ -408,7 +409,7 @@ main(void)
 
     memset(&local_addr, 0, sizeof(local_addr));
     local_addr.sun_family = AF_UNIX;
-    strncpy(local_addr.sun_path, "/tmp/netsniffd.sock", sizeof(local_addr.sun_path)-1);
+    strncpy(local_addr.sun_path, IPC_SOCKET_PATH, sizeof(local_addr.sun_path)-1);
     unlink(local_addr.sun_path);
 
     if(bind(ipc_socket_fd, (struct sockaddr*) &local_addr, sizeof(local_addr)) == -1)
@@ -432,6 +433,7 @@ main(void)
         socklen_t remote_size = sizeof(remote_addr);
 
         /* waiting for connection */
+        syslog(LOG_DEBUG, "Waiting for connection");
         remote_connection_socket = accept(ipc_socket_fd,
                                (struct sockaddr *) &remote_addr,
                                &remote_size);
@@ -440,7 +442,7 @@ main(void)
            syslog(LOG_ERR, "accept() failed: %s", strerror(errno));
            return EXIT_FAILURE;
         }
-
+        syslog(LOG_DEBUG, "Waiting for connection");
         /* Now we are connected, read stream and reply */
 
         /*
@@ -465,6 +467,7 @@ main(void)
         switch (option)
         {
         case DOPT_START:
+            syslog(LOG_DEBUG, "DOPT_START");
             if(dopt_start_handler(remote_connection_socket))
             {
                 close(remote_connection_socket);
@@ -473,6 +476,7 @@ main(void)
             break;
 
         case DOPT_STOP:
+            syslog(LOG_DEBUG, "DOPT_STOP");
             if(dopt_stop_handler(remote_connection_socket))
             {
                 close(remote_connection_socket);
@@ -481,6 +485,7 @@ main(void)
             break;
 
         case DOPT_SET_IFACE:
+            syslog(LOG_DEBUG, "DOPT_SET_IFACE");
             if(dopt_set_iface_handler(remote_connection_socket))
             {
                 close(remote_connection_socket);
@@ -489,6 +494,7 @@ main(void)
             break;
 
         case DOPT_IP_COUNT:
+            syslog(LOG_DEBUG, "DOPT_IP_COUNT");
             if(dopt_ip_count_handler(remote_connection_socket))
             {
                 close(remote_connection_socket);
@@ -497,6 +503,7 @@ main(void)
             break;
 
         case DOPT_STAT:
+            syslog(LOG_DEBUG, "DOPT_STAT");
             if(dopt_stat_handler(remote_connection_socket))
             {
                 close(remote_connection_socket);
@@ -508,6 +515,7 @@ main(void)
            syslog(LOG_ERR, "Invalid option received!");
         }
 
+        syslog(LOG_DEBUG, "Options parsed.");
         close(remote_connection_socket);
     }
 }

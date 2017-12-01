@@ -40,7 +40,6 @@ packet_capture_start();
 int
 packet_set_iface(const char* iface_str);
 
-
 /**
  * @fn packet_get_iface_stats
  * @brief Get stats for interface (or all of them).
