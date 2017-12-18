@@ -22,6 +22,7 @@
 /* Log writer */
 #include <syslog.h>
 
+
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <net/if.h>

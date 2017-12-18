@@ -264,6 +264,8 @@ dopt_ip_count_handler(int remote_connection_socket)
         return 0;
 
     reply_value = count;
+    syslog(LOG_DEBUG, "DOPT_IP_COUNT: sending value: %d",
+           reply_value);
 
     /* Send value back */
     err = send_logged(remote_connection_socket, &reply_value, sizeof(reply_value));
@@ -442,7 +444,7 @@ main(void)
            syslog(LOG_ERR, "accept() failed: %s", strerror(errno));
            return EXIT_FAILURE;
         }
-        syslog(LOG_DEBUG, "Waiting for connection");
+        syslog(LOG_DEBUG, "Connected!");
         /* Now we are connected, read stream and reply */
 
         /*

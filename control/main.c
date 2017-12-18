@@ -129,7 +129,7 @@ daemon_start(void)
 
     if(status)
     {
-        printf("Error occured on netstiffd: %s", strerror(status));
+        printf("Error occured on netstiffd: %s\n", strerror(status));
     }
     SOCKET_CLEANUP();
 }
@@ -163,7 +163,7 @@ daemon_stop(void)
 
     if(status)
     {
-        printf("Error occured on netstiffd: %s", strerror(status));
+        printf("Error occured on netstiffd: %s\n", strerror(status));
     }
     SOCKET_CLEANUP();
 }
@@ -221,11 +221,11 @@ daemon_print_ip(const char *ip_str)
         exit(1);
     }
     /* print response */
-    printf("%d packets passed thru", count);
+    printf("%d packets passed thru\n", count);
 
     if(status)
     {
-        printf("Error occured on netstiffd: %s", strerror(status));
+        printf("Error occured on netstiffd: %s\n", strerror(status));
     }
     SOCKET_CLEANUP()
 }

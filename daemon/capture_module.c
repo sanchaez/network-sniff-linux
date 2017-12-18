@@ -43,7 +43,7 @@ pthread_mutex_t stop_mutex = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t stats_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 #define STATSFILE_TEMPLATE "/var/tmp/netsniffd/%s.stat"
-#define DEFAULT_IFACE "eth0"
+#define DEFAULT_IFACE "ens33"
 #define SOCKET_DATA_SIZE_MAX 65536
 
 char *iface_name = DEFAULT_IFACE;
@@ -53,15 +53,15 @@ char *iface_name = DEFAULT_IFACE;
 /***********************************/
 
 static int
-ip_stat_new(internal_ip_stat * stat, struct in_addr *ip)
+ip_stat_new(internal_ip_stat ** stat, struct in_addr *ip)
 {
     /* !!! malloc !!! */
-    stat = malloc(sizeof(internal_ip_stat));
+    *stat = malloc(sizeof(struct s_internal_iface_stat));
     if(!stat)
-        return ENOMEM;
+        return errno;
 
-    stat->ip = *ip;
-    stat->count = 1;
+    (*stat)->ip = *ip;
+    (*stat)->count = 1;
 
     return 0;
 }
@@ -172,7 +172,6 @@ static int
 packet_stats_dump(internal_iface_stat *stats)
 {
     char filename_buffer[FILENAME_MAX];
-
 
     if(snprintf(filename_buffer,
                 FILENAME_MAX,
@@ -297,7 +296,7 @@ packet_stats_load(internal_iface_stat *stats)
  * If mutex was unlocked, returns zero.
  */
 static int
-is_stopped(pthread_mutex_t *mtx)
+is_running(pthread_mutex_t *mtx)
 {
   switch(pthread_mutex_trylock(mtx))
   {
@@ -312,17 +311,19 @@ is_stopped(pthread_mutex_t *mtx)
 }
 
 int
-work_with_addr(struct in_addr *addr, internal_iface_stat * stat)
+work_with_addr(struct in_addr *addr, internal_iface_stat *stat)
 {
-    internal_ip_stat *new_stat = NULL, *found_stat;
+    internal_ip_stat *new_ip_stat = NULL, *found_stat;
     void *returned_value;
     int err;
 
-    err = ip_stat_new(new_stat, addr);
+    syslog(LOG_DEBUG, "work: creating new struct");
+    err = ip_stat_new(&new_ip_stat, addr);
     if(err)
         return err;
 
-    returned_value = tsearch((void *) new_stat, stat->ip_stats_tree, &ip_stat_compare_fn);
+    syslog(LOG_DEBUG, "work: adding to tree");
+    returned_value = tsearch((void *) new_ip_stat, &stat->ip_stats_tree, &ip_stat_compare_fn);
     if(!returned_value)
     {
         /* tsearch fails when no element can be allocated */
@@ -331,11 +332,11 @@ work_with_addr(struct in_addr *addr, internal_iface_stat * stat)
 
     found_stat = (*(internal_ip_stat **)returned_value);
 
-    if(found_stat != new_stat)
+    if(found_stat != new_ip_stat)
     {
         /* increment count if a value was found */
         ++found_stat->count;
-        free(new_stat);
+        free(new_ip_stat);
     }
     else
     {
@@ -349,7 +350,7 @@ work_with_addr(struct in_addr *addr, internal_iface_stat * stat)
 /* thread errors */
 int thread_last_error;
 
-/* Returns 'struct thread_arg' */
+/* Returns NULL */
 static void *
 packet_loop_fn(void *arg)
 {
@@ -383,8 +384,9 @@ packet_loop_fn(void *arg)
                IFNAMSIZ);
     pthread_mutex_unlock(&stats_mutex);
 
+    syslog(LOG_DEBUG, "start capture: %s", g_stats.iface_str);
     /* capture packets */
-    while(!is_stopped(&stop_mutex))
+    while(is_running(&stop_mutex))
     {
         saddr_len = sizeof(saddr);
         data_retrieved_size = recvfrom(capture_socket,
@@ -397,6 +399,10 @@ packet_loop_fn(void *arg)
             thread_last_error = errno;
             syslog(LOG_WARNING, "recvfrom failed: %s", strerror(thread_last_error));
             continue;
+        } else {
+            char addr[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &saddr.sin_addr, addr, INET_ADDRSTRLEN);
+            syslog(LOG_DEBUG, "recvfrom succeeded: %s", addr);
         }
 
         /* process packet */
@@ -410,7 +416,7 @@ packet_loop_fn(void *arg)
             return NULL;
         }
     }
-
+    syslog(LOG_DEBUG, "stop capture: %s", g_stats.iface_str);
     return NULL;
 }
 
@@ -423,16 +429,23 @@ packet_capture_start()
 {
     int err;
 
+    syslog(LOG_DEBUG, "start capture");
     /* Trylock a mutex. If it locks then thread was stopped.
        Do nothing when mutex was already locked. */
-    if(!is_stopped(&stop_mutex))
+    if(is_running(&stop_mutex))
+    {
+        syslog(LOG_DEBUG, "mutex locked");
         return 0;
+    }
 
     /* load stats */
     if(packet_stats_load(&g_stats))
     {
         /* load failed - create new record */
+        syslog(LOG_DEBUG, "previous stats not loaded");
         iface_stat_init(&g_stats);
+    } else {
+        syslog(LOG_DEBUG, "previous stats loaded");
     }
 
     /* !!! create thread !!! */
@@ -453,10 +466,10 @@ packet_set_iface(const char *iface_str)
     return 0;
 }
 
-int packet_get_iface_stats(packet_interface_stats **stats_out, size_t *stats_size_out, const char *iface_str)
+int packet_get_iface_stats(packet_interface_stats **stats_out,
+                           size_t *stats_size_out,
+                           const char *iface_str)
 {
-    *stats_out = NULL;
-    *stats_size_out = 0;
     return 0;
 }
 
@@ -467,14 +480,28 @@ int packet_get_ip_stats(const char *ip_str, packet_ip_stats *stats)
 
 int packet_get_ip_count(const char *ip_str)
 {
-    return 0;
+    internal_ip_stat search_stats, *result_stats;
+
+    if(inet_pton(AF_INET, ip_str, &search_stats.ip) == -1)
+    {
+        int err = errno;
+        syslog(LOG_ERR, "inet_pton: %s", strerror(err));
+        return 0;
+    }
+
+    result_stats = tfind(&search_stats, &g_stats.ip_stats_tree, ip_stat_compare_fn);
+    if(!result_stats) {
+        return 0;
+    }
+
+    return result_stats->count;
 }
 
 int
 packet_capture_stop()
 {
     /* Trylock a mutex. If it is busy, thread is likely still running. */
-    if(is_stopped(&stop_mutex))
+    if(!is_running(&stop_mutex))
             return 0;
 
     /* Unlock mutex used as a cancelation flag and wait for thread to return. */
