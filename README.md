@@ -1,2 +1,2 @@
 # network-sniff-linux
-Simple packet analyzer daemon with cmdline control.
+[WIP] Simple packet analyzer daemon with cmdline control.
